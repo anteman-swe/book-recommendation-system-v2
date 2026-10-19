@@ -1,0 +1,19 @@
+⚠️ Nästa steg & Öppna frågor
+
+    Databas-schema:
+    Jag antog tabellerna ratings, books, och read_books. Stämmer detta med din databas? Om inte, ge mig schemat så anpassar jag db_client.py.
+
+    Vikter för hybrid-modellen:
+    Just nu är cf_weight=0.7 och content_weight=0.3. Vill du justera detta?
+
+    Caching-strategi:
+        Nu cachas rekommendationer per användare.
+        Alternativ: Cacha hela modellerna (CF + Content) och beräkna rekommendationer dynamiskt (mer minne, men uppdateras vid omträning). Vill du ändra detta?
+
+    Batch-träning:
+        Ska träningscriptet (train.py) köra automatiskt vid startup (t.ex. om ingen modell finns)?
+        Eller ska det endast köras manuellt/schemalagt?
+
+    Felhantering:
+        Vad ska hända om en användare inte finns i träningsdata?
+        Vad ska hända om en bok inte finns i databasen?
