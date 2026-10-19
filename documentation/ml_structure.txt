@@ -1,0 +1,22 @@
+ml_book_recommender/
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI endpoints
+│   ├── config.py            # Inställningar (DB, cache, etc.)
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── cf_model.py      # Collaborative Filtering (NMF)
+│   │   ├── content_model.py # Content-Based (TF-IDF + Cosine)
+│   │   └── hybrid.py        # Kombinerar CF + Content-Based
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── db_client.py     # Ansvarar för DB-anslutning
+│   │   └── preprocess.py    # Rensar/bereder data
+│   └── cache/
+│       ├── __init__.py
+│       └── recommendation_cache.py # Cachar rekommendationer
+├── scripts/
+│   └── train.py             # Batch-träningscript (körs schemalagt)
+├── Dockerfile
+├── requirements.txt
+└── README.md

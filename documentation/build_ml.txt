@@ -1,0 +1,30 @@
+📌 Användning & Deployment
+
+1. Bygg och starta containern
+# Bygg imagen
+docker build -t book-recommender-ml .
+# TODO: Anpassa för Podman istället
+
+# Starta (antag att DB och Redis redan körs i andra containers)
+docker run -d --name ml-service \
+  --network=book_network \  # Gemensamt nätverk med DB och Redis
+  -p 8000:8000 \
+  book-recommender-ml
+
+2. Batch-träning
+Körs antingen:
+    Manuellt i containern:
+    docker exec ml-service python scripts/train.py
+    Schemalagt (t.ex. via cron i containern eller externt).
+
+3. API-Anrop
+    Hämta rekommendationer:
+    curl http://localhost:8000/recommendations/123
+    Svar:
+    {
+      "user_id": "123",
+      "recommendations": ["book_456", "book_789", ...]
+    }
+
+    Trigger omträning:
+    curl -X POST http://localhost:8000/retrain
