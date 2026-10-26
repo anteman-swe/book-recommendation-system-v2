@@ -1,0 +1,60 @@
+# Körs i gång med podman play kube
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fullstack-ai-pod
+  labels:
+    app: bookapp
+spec:
+  containers:
+    # 1. PostgreSQL Databas
+    - name: postgres
+      image: docker.io/library/postgres:16-alpine
+      env:
+        - name: POSTGRES_DB
+          value: mydatabase
+        - name: POSTGRES_USER
+          value: dbuser
+        - name: POSTGRES_PASSWORD
+          value: hemligtlosen
+      ports:
+        - containerPort: 5432
+          hostPort: 5432 # Bra om du vill nå databasen utifrån (t.ex. från IntelliJ)
+
+    # 2. Redis Cache
+    - name: redis
+      image: docker.io/library/redis:alpine
+      ports:
+        - containerPort: 6379
+
+    # 3. Maskininlärningsmodul (Python / FastAPI)
+    - name: ml-service
+      image: localhost/ml-recommendation-service:latest
+      ports:
+        - containerPort: 8000
+
+    # 4. Spring Boot Backend
+    - name: backend
+      image: localhost/spring-boot-backend:latest
+      env:
+        - name: SPRING_DATASOURCE_URL
+          value: jdbc:postgresql://localhost:5432/mydatabase
+        - name: SPRING_DATASOURCE_USERNAME
+          value: dbuser
+        - name: SPRING_DATASOURCE_PASSWORD
+          value: hemligtlosen
+        - name: ML_SERVICE_URL
+          value: http://localhost:8000
+      ports:
+        - containerPort: 8080
+
+    # 5. Next.js Frontend
+    - name: frontend
+      image: localhost/nextjs-frontend:latest
+      env:
+        - name: BACKEND_URL
+          value: http://localhost:8080
+      ports:
+        - containerPort: 3000
+          hostPort: 3000 # Så du kan nå webbsidan från din webbläsare
