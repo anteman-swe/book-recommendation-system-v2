@@ -1,0 +1,391 @@
+
+Det är ett utmärkt val! Att köra **Podman** och utnyttja konceptet med **Pods** är en av Podmans absolut bästa funktioner.
+
+När du sätter allt i en Pod i Podman delar behållarna på samma nätverksstack (localhost) och nätverksnamnrymd. Det betyder att behållarna kan prata med varandra via `localhost:<port>` istället för att hålla på och krångla med Docker-nätverk, vilket gör att det känns som att köra allt på samma maskin fast i isolerade fack.
+
+Eftersom du har fem behållare (Frontend, Backend, ML-modul, Redis och PostgreSQL) kan du antingen köra allt i en enda stor Pod, eller använda en **Kubernetes Podman-manifestfil** (YAML) som Podman kan läsa direkt via `podman play kube`. Det är det smidigaste sättet att starta upp flera behållare i en Pod tillsammans!
+
+---
+
+### Så här kan en Kube-YAML för din Pod se ut (`pod.yaml`)
+
+Här är ett exempel på hur du beskriver din Pod med alla fem behållare. Observera att databasen behöver en volym för att datan inte ska försvinna när Podden startas om.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fullstack-ai-pod
+  labels:
+    app: bookapp
+spec:
+  containers:
+    # 1. PostgreSQL Databas
+    - name: postgres
+      image: docker.io/library/postgres:16-alpine
+      env:
+        - name: POSTGRES_DB
+          value: mydatabase
+        - name: POSTGRES_USER
+          value: dbuser
+        - name: POSTGRES_PASSWORD
+          value: hemligtlosen
+      ports:
+        - containerPort: 5432
+          hostPort: 5432 # Bra om du vill nå databasen utifrån (t.ex. från IntelliJ)
+
+    # 2. Redis Cache
+    - name: redis
+      image: docker.io/library/redis:alpine
+      ports:
+        - containerPort: 6379
+
+    # 3. Maskininlärningsmodul (Python / FastAPI)
+    - name: ml-service
+      image: localhost/ml-recommendation-service:latest
+      ports:
+        - containerPort: 8000
+
+    # 4. Spring Boot Backend
+    - name: backend
+      image: localhost/spring-boot-backend:latest
+      env:
+        - name: SPRING_DATASOURCE_URL
+          value: jdbc:postgresql://localhost:5432/mydatabase
+        - name: SPRING_DATASOURCE_USERNAME
+          value: dbuser
+        - name: SPRING_DATASOURCE_PASSWORD
+          value: hemligtlosen
+        - name: ML_SERVICE_URL
+          value: http://localhost:8000
+      ports:
+        - containerPort: 8080
+
+    # 5. Next.js Frontend
+    - name: frontend
+      image: localhost/nextjs-frontend:latest
+      env:
+        - name: BACKEND_URL
+          value: http://localhost:8080
+      ports:
+        - containerPort: 3000
+          hostPort: 3000 # Så du kan nå webbsidan från din webbläsare
+
+```
+
+---
+
+### Hur startar och hanterar du detta i Podman?
+
+1. **Bygg dina egna containerbilder lokalt först:**
+För din egen backend, frontend och ML-modul bygger du bilderna med Podman (eller Containerfiles):
+```bash
+podman build -t localhost/spring-boot-backend:latest .
+
+```
+
+
+2. **Starta hela härligheten med en enda fil:**
+När bilderna är på plats drar du igång hela Podden med kommando:
+```bash
+podman play kube pod.yaml
+
+```
+
+
+Podman skapar då upp Podden, startar alla fem behållare och knyter ihop säcken.
+3. **Stäng ner och rensa:**
+När du är klar eller vill starta om stänger du ner Podden lika smidigt:
+```bash
+podman play kube --down pod.yaml
+
+```
+
+
+
+### En liten sak att tänka på:
+
+Eftersom alla behållare i en Pod delar `localhost` kan din Spring Boot-backend nå PostgreSQL, Redis och ML-modulen genom att helt enkelt anropa `localhost:5432`, `localhost:6379` och `localhost:8000`. Det blir otroligt rent och snyggt i konfigurationsfilerna!
+
+Vill du titta på hur en effektiv `Containerfile` för din Spring Boot-backend eller din Next.js-frontend kan se ut?
+
+
+Härligt! Då dyker vi ner i hur du bygger lätta och snabba `Containerfile` (Podmans motsvarighet till `Dockerfile`) för både din **Next.js-frontend** och din **Spring Boot-backend**.
+
+För båda två använder vi så kallade **multi-stage builds**. Det gör att byggverktyg som Maven och Node-beroenden försvinner när containern är klar, vilket gör slutbilden extremt liten och säker.
+
+---
+
+### 1. Containerfile för Next.js Frontend (`output: 'standalone'`)
+
+För att Next.js ska kunna köras så smidigt som möjligt i en container sätter vi först `output: 'standalone'` i din `next.config.mjs` (eller `next.config.js`):
+
+```js
+// next.config.mjs
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: 'standalone',
+};
+
+export default nextConfig;
+
+```
+
+Sedan skapar du `Containerfile` i roten på ditt Next.js-projekt:
+
+```dockerfile
+# --- Steg 1: Installera beroenden ---
+FROM docker.io/library/node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# --- Steg 2: Bygg applikationen ---
+FROM docker.io/library/node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED 1
+RUN npm run build
+
+# --- Steg 3: Kör-miljö (Minimal och säker) ---
+FROM docker.io/library/node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+
+# Skapa en icke-root användare för säkerhet
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Kopiera bara de filer som krävs för 'standalone'
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+ENV PORT 3000
+ENV HOSTNAME "0.0.0.0"
+
+CMD ["node", "server.js"]
+
+```
+
+---
+
+### 2. Containerfile för Spring Boot Backend
+
+Här använder vi Maven för att kompilera appen till en `.jar`-fil i det första steget, och kör den sedan i en extremt lätt Java JRE-miljö (Alpine Linux):
+
+```dockerfile
+# --- Steg 1: Bygg appen med Maven ---
+FROM docker.io/library/maven:3.9-eclipse-temurin-21-alpine AS builder
+WORKDIR /app
+
+# Kopiera pom.xml först för att cacha Maven-dependencies
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+
+# Kopiera källkod och bygg JAR-filen
+COPY src ./src
+RUN mvn clean package -DskipTests
+
+# --- Steg 2: Kör-miljö ---
+FROM docker.io/library/eclipse-temurin:21-jre-alpine AS runner
+WORKDIR /app
+
+# Skapa en icke-root användare
+RUN addgroup -S spring && adduser -S spring -G spring
+USER spring:spring
+
+# Kopiera den byggda JAR-filen från builder-steget
+COPY --from=builder /app/target/*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+```
+
+---
+
+### Hur du bygger dem med Podman
+
+Ställ dig i respektive projektmapp i terminalen och kör:
+
+1. **Frontend:**
+```bash
+podman build -t localhost/nextjs-frontend:latest .
+
+```
+
+
+2. **Backend:**
+```bash
+podman build -t localhost/spring-boot-backend:latest .
+
+```
+
+
+
+När bilderna är byggda är det bara att köra `podman play kube pod.yaml` så kommer båda containrarna att snurra igång tillsammans med databasen, Redis och ML-modulen!
+
+Vill du kika närmare på hur du ställer in cachen i Redis från din Python/ML-modul, eller känner du dig redo att köra igång hela Podden?
+
+
+Kort sagt: **Nej, de måste inte ha just Podman, men de behöver något verktyg som kan köra OCI-standardiserade containerbilder (som Docker).**
+
+Eftersom Podman är till 100 % kompatibelt med Docker-standarden (och dessutom använder exakt samma syntax för `podman build` m.m.) så är det fritt fram för andra att använda det som passar dem bäst på deras egna datorer.
+
+Här är hur det brukar funka för den som ska testköra:
+
+---
+
+### 1. Om de kör Docker istället för Podman
+
+Om din kompis eller kollega sitter på Docker Desktop eller Docker Engine kommer din `podman play kube pod.yaml`-fil inte att funka rakt av (eftersom Kubernetes-YAML-filer är en specifik grej för Podman/K8s).
+
+Men det är superenkelt att lösa! Du kan bara lägga till en klassisk `docker-compose.yml` i roten av projektet brevid din Podman-fil.
+
+* **Podman** kan nämligen *också* läsa `docker-compose.yml` via `podman compose up`!
+* **Docker** läser den via `docker compose up`.
+
+Med en `docker-compose.yml` kan alltså både Podman-användare och Docker-användare köra exakt samma kommando och få igång alla fem behållare utan krångel.
+
+### 2. Måste de bygga alla containers själva?
+
+Om koden ligger upplagd på GitHub kan de klona ner repot. Men för att slippa att alla du känner sitter och bygger om Java-projekt med Maven och Next.js-appar från grunden på sina egna datorer, brukar man lösa det på ett par smidiga sätt:
+
+* **Skicka färdiga bilder (Registry):** Om du laddar upp dina byggda containerbilder till ett publikt (eller privat) register som **GitHub Container Registry (GHCR)** eller Docker Hub, kan andra bara ladda ner (`pull`) de färdiga bilderna direkt.
+* **Källkods-kloning + compose:** Om de har Maven och Node.js installerat kan de bygga bilderna lokalt med ett enda kommando via en Compose-fil som bygger `build: .` direkt.
+
+---
+
+### Vill du ha en `docker-compose.yml` som backup?
+
+Om du vill göra det busenkelt för både dig själv (via Podman) och andra (via antingen Podman eller Docker) att starta hela cirkusen med ett enda kommando, så kan vi snabbt skriva ihop en `docker-compose.yml` som speglar din Podman-pod!
+
+Vill du ha ett exempel på hur en `docker-compose.yml` ser ut för dina fem behållare?
+
+
+Grymt! Här är en komplett och snygg `docker-compose.yml` som knyter ihop alla dina fem behållare.
+
+Det fantastiska med den här filen är att den fungerar i princip överallt: du kan köra den med **Podman** (`podman compose up`) om du vill köra allt lokalt, eller så kan en kollega köra den med **Docker** (`docker compose up`) utan att något behöver ändras.
+
+---
+
+### `docker-compose.yml`
+
+Skapa filen i roten av ditt projekt:
+
+```yaml
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Databas
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: bookapp-postgres
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: hemligtlosen
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+  # 2. Redis Cache
+  redis:
+    image: docker.io/library/redis:alpine
+    container_name: bookapp-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  # 3. Maskininlärningsmodul (Python / FastAPI)
+  ml-service:
+    build:
+      context: ./ml-service  # Sökväg till mappen där din ML-kod och Containerfile ligger
+    container_name: bookapp-ml-service
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+
+  # 4. Spring Boot Backend
+  backend:
+    build:
+      context: ./backend     # Sökväg till din Spring Boot-mapp
+    container_name: bookapp-backend
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/mydatabase
+      - SPRING_DATASOURCE_USERNAME=dbuser
+      - SPRING_DATASOURCE_PASSWORD=hemligtlosen
+      - ML_SERVICE_URL=http://ml-service:8000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - redis
+      - ml-service
+    networks:
+      - app-network
+
+  # 5. Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend    # Sökväg till din Next.js-mapp
+    container_name: bookapp-frontend
+    environment:
+      - BACKEND_URL=http://backend:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+    app-network:
+        driver: bridge
+
+```
+
+---
+
+### Så här smidigt kör du igång det:
+
+* **Med Podman:**
+```bash
+podman compose up --build
+
+```
+
+
+* **Med Docker:**
+```bash
+docker compose up --build
+
+```
+
+
+
+### Varför det här upplägget är så smidigt:
+
+Tack vare att vi sätter upp ett eget nätverk (`app-network`) kan behållarna nå varandra via sina tjänstnamn (t.ex. kan backend nå databasen på `jdbc:postgresql://postgres:5432/...` och ML-modulen på `http://ml-service:8000`). Dessutom ser `volumes`-delen till att din databasdata ligger kvar säkert på hårddisken även om du stänger ner behållarna.
+
+Har du fått strukturerna på mappar för frontend, backend och ML-service på plats, eller vill du kika på hur konfigurationen mellan Spring Boot och din Python-modul brukar se ut?
+
